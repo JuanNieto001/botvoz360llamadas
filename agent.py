@@ -143,6 +143,43 @@ class TranscriptTap(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
+class SilenceWatchdog(FrameProcessor):
+    """Evita que el agente se quede mudo.
+
+    Si el turno del cliente terminó y el agente no empieza a hablar en
+    WATCHDOG_SECS segundos (por ejemplo, porque un pedazo tardío de la
+    transcripción abrió un turno vacío), fuerza una respuesta con lo que ya
+    se escuchó. Va antes del agregador de usuario para poder enviarle la orden.
+    """
+
+    def __init__(self, espera_secs: float):
+        super().__init__()
+        self._espera = espera_secs
+        self._tarea: asyncio.Task | None = None
+
+    def _cancelar(self):
+        if self._tarea and not self._tarea.done():
+            self._tarea.cancel()
+        self._tarea = None
+
+    async def _vigilar(self):
+        try:
+            await asyncio.sleep(self._espera)
+            logger.warning(f"[vigilante] {self._espera:.0f} s sin respuesta tras el turno del cliente; forzando respuesta")
+            await self.push_frame(LLMRunFrame(), FrameDirection.DOWNSTREAM)
+        except asyncio.CancelledError:
+            pass
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        if isinstance(frame, UserStoppedSpeakingFrame):
+            self._cancelar()
+            self._tarea = asyncio.create_task(self._vigilar())
+        elif isinstance(frame, (BotStartedSpeakingFrame, UserStartedSpeakingFrame)):
+            self._cancelar()
+        await self.push_frame(frame, direction)
+
+
 class TimingObserver(BaseObserver):
     """Anota en consola cuánto tarda cada parte de la respuesta.
 
@@ -406,6 +443,8 @@ async def main():
     aggregators = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
+            # Si un turno queda abierto sin señal de fin, se cierra a los N segundos (antes 5).
+            user_turn_stop_timeout=env_float("TURNO_TRABADO_SECS", 2.0),
             vad_analyzer=SileroVADAnalyzer(
                 params=VADParams(
                     confidence=env_float("VAD_CONFIDENCE", 0.7),
@@ -437,6 +476,7 @@ async def main():
             transport.input(),
             stt,
             TranscriptTap(writer),
+            SilenceWatchdog(env_float("WATCHDOG_SECS", 4.0)),
             aggregators.user(),
             llm,
             tts,

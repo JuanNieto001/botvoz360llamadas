@@ -42,7 +42,7 @@ class EdgeTTSService(TTSService):
 
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame, None]:
         voice = self._settings.voice
-        text = re.sub(r"\[[^\]]*\]", "", _EMOJI.sub("", text)).strip()
+        text = re.sub(r"\[[^\]]*\]|\([^)]*\)", "", _EMOJI.sub("", text)).strip()
         if not text:
             return
         logger.debug(f"Edge TTS [{voice}]: {text}")
