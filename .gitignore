@@ -1,0 +1,10 @@
+.venv/
+.env
+conversaciones/
+prueba_*.mp3
+__pycache__/
+llamadas/
+voz_clon/
+*.log
+*.wav
+*.mp3
